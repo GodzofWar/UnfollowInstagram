@@ -41,16 +41,35 @@ Once loaded:
 Protect accounts you never want to unfollow (close friends, family, etc.).
 
 - Add usernames manually (supports `@username` format)
+- **Import from CSV** — bulk-add protected accounts from a `.csv` or `.txt` file
 - Quick-protect from the profile list with the shield button
 - Protected accounts are dimmed and disabled in the profile list
 - Skipped automatically during mass unfollow
 - Persisted across browser sessions via Chrome storage
+
+### History & Undo
+
+Track every account you unfollow and optionally re-follow them.
+
+- **Unfollow log** — each unfollowed account is recorded with a timestamp
+- **Re-follow button** — opens the profile in a background tab and automatically clicks Follow
+- **Clear history** to reset the log
+
+### Safety Features
+
+- **Action block detection** — automatically stops if Instagram shows "Try Again Later" or "Action Blocked"
+- **Cooldown timer** — 24-hour countdown banner after an unfollow session to help you avoid rate limits
+- **Configurable limits** — cap unfollows per session (50, 100, 200, 500, or unlimited)
 
 ### Progress Tracking
 
 - **Animated progress bar** on all operations (indeterminate during scraping, percentage-based during unfollowing)
 - **Live text updates** showing profile count during loading ("Followers: 380 loaded...")
 - **Completion summary** with counts and limit-reached indicator
+
+### Dark Mode
+
+Automatically matches your system theme — no toggle needed. Uses CSS custom properties with `prefers-color-scheme` media query.
 
 ## Usage
 
