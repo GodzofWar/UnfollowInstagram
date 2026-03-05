@@ -1,11 +1,20 @@
-// ── Tab switching ──
+// ── Tab switching with memory ──
+function switchTab(panelId) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const tab = document.querySelector('.tab[data-panel="' + panelId + '"]');
+  if (tab) tab.classList.add('active');
+  document.getElementById(panelId).classList.add('active');
+  chrome.storage.local.set({ lastTab: panelId });
+}
+
 document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    document.getElementById(tab.dataset.panel).classList.add('active');
-  });
+  tab.addEventListener('click', () => switchTab(tab.dataset.panel));
+});
+
+// Restore last active tab
+chrome.storage.local.get({ lastTab: 'mass-panel' }, (data) => {
+  switchTab(data.lastTab);
 });
 
 // ── Shared helpers ──
@@ -34,7 +43,6 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// ── Progress bar helpers ──
 function showProgress(wrapId, fillId, textId, text, percent) {
   const wrap = document.getElementById(wrapId);
   const fill = document.getElementById(fillId);
@@ -42,7 +50,6 @@ function showProgress(wrapId, fillId, textId, text, percent) {
   wrap.style.display = 'block';
   textEl.textContent = text;
   if (percent === null) {
-    // Indeterminate
     fill.className = 'progress-fill indeterminate';
     fill.style.width = '30%';
   } else {
@@ -53,6 +60,44 @@ function showProgress(wrapId, fillId, textId, text, percent) {
 
 function hideProgress(wrapId) {
   document.getElementById(wrapId).style.display = 'none';
+}
+
+// ── Cooldown Timer ──
+const cooldownBanner = document.getElementById('cooldown-banner');
+let cooldownInterval = null;
+
+function updateCooldown() {
+  chrome.storage.local.get({ lastRunTime: 0, lastRunCount: 0 }, (data) => {
+    if (!data.lastRunTime) {
+      cooldownBanner.style.display = 'none';
+      return;
+    }
+    const elapsed = Date.now() - data.lastRunTime;
+    const cooldownMs = 24 * 60 * 60 * 1000; // 24 hours
+    const remaining = cooldownMs - elapsed;
+
+    if (remaining <= 0) {
+      cooldownBanner.style.display = 'none';
+      if (cooldownInterval) { clearInterval(cooldownInterval); cooldownInterval = null; }
+      return;
+    }
+
+    const hours = Math.floor(remaining / 3600000);
+    const mins = Math.floor((remaining % 3600000) / 60000);
+    cooldownBanner.style.display = 'block';
+    cooldownBanner.textContent = 'Last session: ' + data.lastRunCount + ' unfollowed. ' +
+      'Recommended cooldown: ' + hours + 'h ' + mins + 'm remaining';
+  });
+}
+
+updateCooldown();
+cooldownInterval = setInterval(updateCooldown, 30000);
+
+function recordSession(count) {
+  if (count > 0) {
+    chrome.storage.local.set({ lastRunTime: Date.now(), lastRunCount: count });
+    updateCooldown();
+  }
 }
 
 // ── Whitelist ──
@@ -117,8 +162,144 @@ whitelistInput.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') addToWhitelist();
 });
 
-// Load whitelist on popup open
+// Import whitelist from CSV
+const importBtn = document.getElementById('import-whitelist-btn');
+const importFile = document.getElementById('import-whitelist-file');
+
+importBtn.addEventListener('click', () => importFile.click());
+importFile.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = reader.result;
+    const lines = text.split(/\r?\n/);
+    let added = 0;
+    for (const line of lines) {
+      // Support: plain usernames, CSV with username in first column, @username
+      const parts = line.split(',');
+      let username = (parts[0] || '').trim().replace(/^["']|["']$/g, '').replace(/^@/, '');
+      if (username && username !== 'username' && !username.includes(' ')) {
+        whitelist.add(username);
+        added++;
+      }
+    }
+    saveWhitelist();
+    renderWhitelist();
+    importFile.value = '';
+    alert('Imported ' + added + ' usernames to whitelist.');
+  };
+  reader.readAsText(file);
+});
+
 loadWhitelist(() => renderWhitelist());
+
+// ── History / Undo ──
+function addToHistory(username, displayName) {
+  chrome.storage.local.get({ unfollowHistory: [] }, (data) => {
+    const history = data.unfollowHistory;
+    history.unshift({ username, displayName: displayName || '', timestamp: Date.now() });
+    if (history.length > 1000) history.length = 1000;
+    chrome.storage.local.set({ unfollowHistory: history });
+  });
+}
+
+function renderHistory() {
+  chrome.storage.local.get({ unfollowHistory: [] }, (data) => {
+    const listEl = document.getElementById('history-list');
+    const countEl = document.getElementById('history-count');
+    const statusEl = document.getElementById('history-status');
+    listEl.innerHTML = '';
+
+    const history = data.unfollowHistory;
+    if (history.length === 0) {
+      statusEl.textContent = 'No unfollow history yet';
+      countEl.textContent = '';
+      return;
+    }
+
+    statusEl.textContent = 'Recently unfollowed accounts';
+    for (const entry of history) {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+
+      const info = document.createElement('div');
+      info.className = 'history-info';
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'username';
+      nameSpan.textContent = entry.username;
+
+      const timeSpan = document.createElement('div');
+      timeSpan.className = 'history-time';
+      timeSpan.textContent = formatTime(entry.timestamp);
+
+      info.appendChild(nameSpan);
+      if (entry.displayName) {
+        const dn = document.createElement('span');
+        dn.className = 'display-name';
+        dn.textContent = entry.displayName;
+        info.appendChild(dn);
+      }
+      info.appendChild(timeSpan);
+
+      const refollowBtn = document.createElement('button');
+      refollowBtn.className = 'refollow-btn';
+      refollowBtn.textContent = 'Re-follow';
+      refollowBtn.addEventListener('click', () => {
+        chrome.tabs.create({
+          url: 'https://www.instagram.com/' + entry.username + '/',
+          active: false
+        }, (tab) => {
+          // Try to auto-click Follow after page loads
+          chrome.tabs.onUpdated.addListener(function listener(tabId, info) {
+            if (tabId === tab.id && info.status === 'complete') {
+              chrome.tabs.onUpdated.removeListener(listener);
+              setTimeout(() => {
+                chrome.scripting.executeScript({
+                  target: { tabId: tab.id },
+                  func: () => {
+                    const btn = [...document.querySelectorAll('button')].find(
+                      b => b.innerText === 'Follow' && !b.innerText.includes('Following')
+                    );
+                    if (btn) btn.click();
+                  }
+                });
+              }, 2000);
+            }
+          });
+        });
+        refollowBtn.textContent = 'Opened';
+        refollowBtn.disabled = true;
+      });
+
+      item.appendChild(info);
+      item.appendChild(refollowBtn);
+      listEl.appendChild(item);
+    }
+
+    countEl.textContent = history.length + ' account' + (history.length !== 1 ? 's' : '') + ' in history';
+  });
+}
+
+function formatTime(timestamp) {
+  const diff = Date.now() - timestamp;
+  if (diff < 60000) return 'just now';
+  if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+  if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+  return Math.floor(diff / 86400000) + 'd ago';
+}
+
+document.getElementById('clear-history').addEventListener('click', () => {
+  if (confirm('Clear all unfollow history?')) {
+    chrome.storage.local.set({ unfollowHistory: [] });
+    renderHistory();
+  }
+});
+
+// Render history when switching to tab
+document.querySelector('.tab[data-panel="history-panel"]').addEventListener('click', renderHistory);
+renderHistory();
 
 // ── Mass Unfollow Panel ──
 const massStatus = document.getElementById('mass-status');
@@ -137,15 +318,16 @@ function setMassRunning(running) {
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  // Mass unfollow messages
   if (message.type === 'unfollow-count') {
     massCount.textContent = message.count;
+    if (message.username) addToHistory(message.username, '');
     showProgress('mass-progress', 'mass-progress-fill', 'mass-progress-text',
       'Unfollowed ' + message.count + (message.skipped ? ' (' + message.skipped + ' whitelisted skipped)' : ''), null);
   } else if (message.type === 'unfollow-done') {
     massCount.textContent = message.count;
     setMassRunning(false);
     hideProgress('mass-progress');
+    recordSession(message.count);
     const limitVal = parseInt(massLimit.value, 10);
     const hitLimit = limitVal > 0 && message.count >= limitVal;
     setStatus(massStatus, 'Done! Unfollowed ' + message.count + ' accounts.' +
@@ -154,10 +336,9 @@ chrome.runtime.onMessage.addListener((message) => {
     setMassRunning(false);
     hideProgress('mass-progress');
     setStatus(massStatus, message.error, 'error');
-  }
-  // Selective unfollow messages
-  else if (message.type === 'selective-count') {
+  } else if (message.type === 'selective-count') {
     selectCountEl.textContent = message.count;
+    if (message.username) addToHistory(message.username, '');
     const pct = Math.round((message.count / message.total) * 100);
     showProgress('select-progress', 'select-progress-fill', 'select-progress-text',
       message.count + ' / ' + message.total + ' unfollowed', pct);
@@ -165,14 +346,13 @@ chrome.runtime.onMessage.addListener((message) => {
     selectCountEl.textContent = message.count;
     setSelectRunning(false);
     hideProgress('select-progress');
+    recordSession(message.count);
     setStatus(selectStatus, 'Done! Unfollowed ' + message.count + ' of ' + message.total + ' selected.');
   } else if (message.type === 'selective-error') {
     setSelectRunning(false);
     hideProgress('select-progress');
     setStatus(selectStatus, message.error, 'error');
-  }
-  // Scrape progress messages
-  else if (message.type === 'scrape-progress') {
+  } else if (message.type === 'scrape-progress') {
     showProgress('select-progress', 'select-progress-fill', 'select-progress-text',
       message.text, message.percent);
   }
@@ -220,7 +400,7 @@ const selectDelay = document.getElementById('select-delay');
 const selectLimit = document.getElementById('select-limit');
 const exportBtn = document.getElementById('export-csv');
 
-let profiles = []; // { username, displayName, selected }
+let profiles = [];
 
 function renderProfiles(filter) {
   const query = (filter || '').toLowerCase();
@@ -316,9 +496,7 @@ function showSelectUI(show) {
   document.getElementById('select-count-label').style.display = display;
 }
 
-searchInput.addEventListener('input', () => {
-  renderProfiles(searchInput.value);
-});
+searchInput.addEventListener('input', () => renderProfiles(searchInput.value));
 
 selectAllCheckbox.addEventListener('change', () => {
   const query = (searchInput.value || '').toLowerCase();
@@ -371,7 +549,6 @@ loadBtn.addEventListener('click', () => {
     setStatus(selectStatus, 'Scrolling to load profiles...', 'running');
     setAllLoadButtons(true);
     showProgress('select-progress', 'select-progress-fill', 'select-progress-text', 'Loading...', null);
-
     chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: scrapeProfiles
@@ -385,7 +562,6 @@ loadLeastBtn.addEventListener('click', () => {
     setStatus(selectStatus, 'Loading least interacted profiles...', 'running');
     setAllLoadButtons(true);
     showProgress('select-progress', 'select-progress-fill', 'select-progress-text', 'Finding category...', null);
-
     chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: scrapeLeastInteracted
@@ -399,7 +575,6 @@ loadNonFollowersBtn.addEventListener('click', () => {
     setStatus(selectStatus, 'Scanning followers & following lists...', 'running');
     setAllLoadButtons(true);
     showProgress('select-progress', 'select-progress-fill', 'select-progress-text', 'Opening followers...', null);
-
     chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: scrapeNonFollowers
@@ -411,10 +586,7 @@ loadNonFollowersBtn.addEventListener('click', () => {
         return;
       }
       const data = results[0].result;
-      if (data.error) {
-        setStatus(selectStatus, data.error, 'error');
-        return;
-      }
+      if (data.error) { setStatus(selectStatus, data.error, 'error'); return; }
       if (data.nonFollowers.length === 0) {
         setStatus(selectStatus, 'Everyone you follow follows you back!');
         return;
@@ -422,12 +594,10 @@ loadNonFollowersBtn.addEventListener('click', () => {
 
       const existing = new Map(profiles.map(p => [p.username, p.selected]));
       profiles = data.nonFollowers.map(p => ({
-        ...p,
-        selected: existing.has(p.username) ? existing.get(p.username) : false
+        ...p, selected: existing.has(p.username) ? existing.get(p.username) : false
       }));
 
-      setStatus(selectStatus,
-        data.nonFollowers.length + ' non-followers found (of ' +
+      setStatus(selectStatus, data.nonFollowers.length + ' non-followers found (of ' +
         data.followingCount + ' following, ' + data.followersCount + ' followers).');
       showSelectUI(true);
       renderProfiles(searchInput.value);
@@ -446,7 +616,7 @@ function setSelectRunning(running) {
   if (running) setStatus(selectStatus, 'Unfollowing selected...', 'running');
 }
 
-// ── Export CSV ──
+// Export CSV
 exportBtn.addEventListener('click', () => {
   if (profiles.length === 0) return;
   const header = 'username,display_name,whitelisted';
@@ -479,7 +649,6 @@ unfollowSelectedBtn.addEventListener('click', () => {
     selectCountEl.textContent = '0';
     showProgress('select-progress', 'select-progress-fill', 'select-progress-text',
       '0 / ' + selected.length + ' unfollowed', 0);
-
     chrome.scripting.executeScript({
       target: { tabId: tab.id },
       func: selectiveUnfollow,
@@ -503,41 +672,31 @@ function scrapeProfiles() {
   function findScrollContainer() {
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog) {
-      const scrollables = dialog.querySelectorAll('div');
-      for (const div of scrollables) {
-        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) {
-          return div;
-        }
+      for (const div of dialog.querySelectorAll('div')) {
+        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) return div;
       }
     }
     return null;
   }
 
   function getProfileEntries() {
-    const results = [];
-    const seen = new Set();
-    const buttons = [...document.querySelectorAll('button')].filter(
-      btn => btn.innerText === 'Following'
-    );
+    const results = [], seen = new Set();
+    const buttons = [...document.querySelectorAll('button')].filter(b => b.innerText === 'Following');
     for (const btn of buttons) {
       let container = btn.closest('[class]');
       for (let i = 0; i < 10 && container; i++) {
-        const links = container.querySelectorAll('a[href*="/"]');
-        for (const link of links) {
+        for (const link of container.querySelectorAll('a[href*="/"]')) {
           const href = link.getAttribute('href');
           if (href && href.match(/^\/[^/]+\/$/)) {
             const username = href.replace(/\//g, '');
             if (!seen.has(username) && username !== '') {
               seen.add(username);
               let displayName = '';
-              const spans = container.querySelectorAll('span');
-              for (const span of spans) {
+              for (const span of container.querySelectorAll('span')) {
                 const text = span.textContent.trim();
-                if (text && text !== username && text !== 'Following' &&
-                    text !== 'Follow' && text !== 'Requested' &&
-                    !text.includes('Verified') && text.length < 50) {
-                  displayName = text;
-                  break;
+                if (text && text !== username && text !== 'Following' && text !== 'Follow' &&
+                    text !== 'Requested' && !text.includes('Verified') && text.length < 50) {
+                  displayName = text; break;
                 }
               }
               results.push({ username, displayName });
@@ -552,38 +711,21 @@ function scrapeProfiles() {
   }
 
   return new Promise((resolve) => {
-    const scrollContainer = findScrollContainer();
-    let lastCount = 0;
-    let stableRounds = 0;
-
-    async function scrollAndCollect() {
+    const sc = findScrollContainer();
+    let lastCount = 0, stableRounds = 0;
+    async function go() {
       const wait = (ms) => new Promise(r => setTimeout(r, ms));
       for (let i = 0; i < 50; i++) {
-        if (scrollContainer) {
-          scrollContainer.scrollTop = scrollContainer.scrollHeight;
-        } else {
-          window.scrollTo(0, document.body.scrollHeight);
-        }
+        if (sc) sc.scrollTop = sc.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
         await wait(800);
-
         const entries = getProfileEntries();
-        chrome.runtime.sendMessage({
-          type: 'scrape-progress',
-          text: entries.length + ' profiles loaded...',
-          percent: null
-        });
-        if (entries.length === lastCount) {
-          stableRounds++;
-          if (stableRounds >= 3) break;
-        } else {
-          stableRounds = 0;
-          lastCount = entries.length;
-        }
+        chrome.runtime.sendMessage({ type: 'scrape-progress', text: entries.length + ' profiles loaded...', percent: null });
+        if (entries.length === lastCount) { stableRounds++; if (stableRounds >= 3) break; }
+        else { stableRounds = 0; lastCount = entries.length; }
       }
       resolve(getProfileEntries());
     }
-
-    scrollAndCollect();
+    go();
   });
 }
 
@@ -593,11 +735,8 @@ function scrapeNonFollowers() {
   function findScrollContainer() {
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog) {
-      const scrollables = dialog.querySelectorAll('div');
-      for (const div of scrollables) {
-        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) {
-          return div;
-        }
+      for (const div of dialog.querySelectorAll('div')) {
+        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) return div;
       }
     }
     return null;
@@ -607,42 +746,34 @@ function scrapeNonFollowers() {
     const dialog = document.querySelector('[role="dialog"]');
     if (!dialog) return [];
     const seen = new Set();
-    const links = dialog.querySelectorAll('a[href]');
-    for (const link of links) {
+    for (const link of dialog.querySelectorAll('a[href]')) {
       const href = link.getAttribute('href');
       if (href && href.match(/^\/[^/]+\/$/)) {
-        const username = href.replace(/\//g, '');
-        if (username) seen.add(username);
+        const u = href.replace(/\//g, '');
+        if (u) seen.add(u);
       }
     }
     return [...seen];
   }
 
   function scrapeFollowingFromDialog() {
-    const results = [];
-    const seen = new Set();
-    const buttons = [...document.querySelectorAll('button')].filter(
-      btn => btn.innerText === 'Following'
-    );
+    const results = [], seen = new Set();
+    const buttons = [...document.querySelectorAll('button')].filter(b => b.innerText === 'Following');
     for (const btn of buttons) {
       let container = btn.closest('[class]');
       for (let i = 0; i < 10 && container; i++) {
-        const links = container.querySelectorAll('a[href*="/"]');
-        for (const link of links) {
+        for (const link of container.querySelectorAll('a[href*="/"]')) {
           const href = link.getAttribute('href');
           if (href && href.match(/^\/[^/]+\/$/)) {
             const username = href.replace(/\//g, '');
             if (!seen.has(username) && username !== '') {
               seen.add(username);
               let displayName = '';
-              const spans = container.querySelectorAll('span');
-              for (const span of spans) {
+              for (const span of container.querySelectorAll('span')) {
                 const text = span.textContent.trim();
-                if (text && text !== username && text !== 'Following' &&
-                    text !== 'Follow' && text !== 'Requested' &&
-                    !text.includes('Verified') && text.length < 50) {
-                  displayName = text;
-                  break;
+                if (text && text !== username && text !== 'Following' && text !== 'Follow' &&
+                    text !== 'Requested' && !text.includes('Verified') && text.length < 50) {
+                  displayName = text; break;
                 }
               }
               results.push({ username, displayName });
@@ -657,96 +788,52 @@ function scrapeNonFollowers() {
   }
 
   async function scrollDialogToEnd(label) {
-    const scrollContainer = findScrollContainer();
-    let lastCount = 0;
-    let stableRounds = 0;
-
+    const sc = findScrollContainer();
+    let lastCount = 0, stableRounds = 0;
     for (let i = 0; i < 100; i++) {
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      } else {
-        window.scrollTo(0, document.body.scrollHeight);
-      }
+      if (sc) sc.scrollTop = sc.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
       await wait(800);
-
       const count = scrapeUsernamesFromDialog().length;
-      chrome.runtime.sendMessage({
-        type: 'scrape-progress',
-        text: label + ': ' + count + ' loaded...',
-        percent: null
-      });
-      if (count === lastCount) {
-        stableRounds++;
-        if (stableRounds >= 3) break;
-      } else {
-        stableRounds = 0;
-        lastCount = count;
-      }
+      chrome.runtime.sendMessage({ type: 'scrape-progress', text: label + ': ' + count + ' loaded...', percent: null });
+      if (count === lastCount) { stableRounds++; if (stableRounds >= 3) break; }
+      else { stableRounds = 0; lastCount = count; }
     }
   }
 
   function closeDialog() {
     const closeBtn = document.querySelector('[role="dialog"] button[aria-label="Close"]') ||
       document.querySelector('[role="dialog"] [aria-label="Close"]');
-    if (closeBtn) {
-      closeBtn.click();
-      return;
-    }
+    if (closeBtn) { closeBtn.click(); return; }
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
   }
 
   function clickListLink(text) {
-    const links = document.querySelectorAll('a[href]');
-    for (const link of links) {
+    for (const link of document.querySelectorAll('a[href]')) {
       const href = link.getAttribute('href');
-      if (href && href.includes('/' + text + '/')) {
-        link.click();
-        return true;
-      }
+      if (href && href.includes('/' + text + '/')) { link.click(); return true; }
     }
     return false;
   }
 
   return new Promise(async (resolve) => {
-    chrome.runtime.sendMessage({
-      type: 'scrape-progress', text: 'Opening followers list...', percent: null
-    });
-
+    chrome.runtime.sendMessage({ type: 'scrape-progress', text: 'Opening followers list...', percent: null });
     if (!clickListLink('followers')) {
-      resolve({ error: 'Could not find followers link. Go to your profile page first.' });
-      return;
+      resolve({ error: 'Could not find followers link. Go to your profile page first.' }); return;
     }
     await wait(2000);
-
     await scrollDialogToEnd('Followers');
     const followers = new Set(scrapeUsernamesFromDialog());
-
     closeDialog();
     await wait(1000);
-
-    chrome.runtime.sendMessage({
-      type: 'scrape-progress', text: 'Opening following list...', percent: null
-    });
-
-    if (!clickListLink('following')) {
-      resolve({ error: 'Could not find following link.' });
-      return;
-    }
+    chrome.runtime.sendMessage({ type: 'scrape-progress', text: 'Opening following list...', percent: null });
+    if (!clickListLink('following')) { resolve({ error: 'Could not find following link.' }); return; }
     await wait(2000);
-
     await scrollDialogToEnd('Following');
     const followingList = scrapeFollowingFromDialog();
-
     closeDialog();
-
-    chrome.runtime.sendMessage({
-      type: 'scrape-progress', text: 'Comparing lists...', percent: 100
-    });
-
-    const nonFollowers = followingList.filter(p => !followers.has(p.username));
-
+    chrome.runtime.sendMessage({ type: 'scrape-progress', text: 'Comparing lists...', percent: 100 });
     resolve({
-      nonFollowers,
+      nonFollowers: followingList.filter(p => !followers.has(p.username)),
       followingCount: followingList.length,
       followersCount: followers.size
     });
@@ -759,41 +846,31 @@ function scrapeLeastInteracted() {
   function findScrollContainer() {
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog) {
-      const scrollables = dialog.querySelectorAll('div');
-      for (const div of scrollables) {
-        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) {
-          return div;
-        }
+      for (const div of dialog.querySelectorAll('div')) {
+        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) return div;
       }
     }
     return null;
   }
 
   function getProfileEntries() {
-    const results = [];
-    const seen = new Set();
-    const buttons = [...document.querySelectorAll('button')].filter(
-      btn => btn.innerText === 'Following'
-    );
+    const results = [], seen = new Set();
+    const buttons = [...document.querySelectorAll('button')].filter(b => b.innerText === 'Following');
     for (const btn of buttons) {
       let container = btn.closest('[class]');
       for (let i = 0; i < 10 && container; i++) {
-        const links = container.querySelectorAll('a[href*="/"]');
-        for (const link of links) {
+        for (const link of container.querySelectorAll('a[href*="/"]')) {
           const href = link.getAttribute('href');
           if (href && href.match(/^\/[^/]+\/$/)) {
             const username = href.replace(/\//g, '');
             if (!seen.has(username) && username !== '') {
               seen.add(username);
               let displayName = '';
-              const spans = container.querySelectorAll('span');
-              for (const span of spans) {
+              for (const span of container.querySelectorAll('span')) {
                 const text = span.textContent.trim();
-                if (text && text !== username && text !== 'Following' &&
-                    text !== 'Follow' && text !== 'Requested' &&
-                    !text.includes('Verified') && text.length < 50) {
-                  displayName = text;
-                  break;
+                if (text && text !== username && text !== 'Following' && text !== 'Follow' &&
+                    text !== 'Requested' && !text.includes('Verified') && text.length < 50) {
+                  displayName = text; break;
                 }
               }
               results.push({ username, displayName });
@@ -810,70 +887,39 @@ function scrapeLeastInteracted() {
   return new Promise(async (resolve) => {
     const allElements = document.querySelectorAll('a, button, span, div[role="button"]');
     let clicked = false;
-
     for (const el of allElements) {
       const text = (el.textContent || '').trim();
       if (text === 'Least Interacted With' || text === 'Least interacted with') {
-        el.click();
-        clicked = true;
-        await wait(1500);
-        break;
+        el.click(); clicked = true; await wait(1500); break;
       }
     }
-
     if (!clicked) {
       for (const el of allElements) {
         const text = (el.textContent || '').trim().toLowerCase();
         if (text === 'categories' || text === 'sort by default') {
-          el.click();
-          await wait(1000);
-          const options = document.querySelectorAll('a, button, span, div[role="button"]');
-          for (const opt of options) {
+          el.click(); await wait(1000);
+          for (const opt of document.querySelectorAll('a, button, span, div[role="button"]')) {
             const optText = (opt.textContent || '').trim();
             if (optText === 'Least Interacted With' || optText === 'Least interacted with') {
-              opt.click();
-              clicked = true;
-              await wait(1500);
-              break;
+              opt.click(); clicked = true; await wait(1500); break;
             }
           }
           if (clicked) break;
         }
       }
     }
+    if (!clicked) { resolve([]); return; }
 
-    if (!clicked) {
-      resolve([]);
-      return;
-    }
-
-    const scrollContainer = findScrollContainer();
-    let lastCount = 0;
-    let stableRounds = 0;
-
+    const sc = findScrollContainer();
+    let lastCount = 0, stableRounds = 0;
     for (let i = 0; i < 50; i++) {
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      } else {
-        window.scrollTo(0, document.body.scrollHeight);
-      }
+      if (sc) sc.scrollTop = sc.scrollHeight; else window.scrollTo(0, document.body.scrollHeight);
       await wait(800);
-
       const entries = getProfileEntries();
-      chrome.runtime.sendMessage({
-        type: 'scrape-progress',
-        text: entries.length + ' least interacted loaded...',
-        percent: null
-      });
-      if (entries.length === lastCount) {
-        stableRounds++;
-        if (stableRounds >= 3) break;
-      } else {
-        stableRounds = 0;
-        lastCount = entries.length;
-      }
+      chrome.runtime.sendMessage({ type: 'scrape-progress', text: entries.length + ' least interacted loaded...', percent: null });
+      if (entries.length === lastCount) { stableRounds++; if (stableRounds >= 3) break; }
+      else { stableRounds = 0; lastCount = entries.length; }
     }
-
     resolve(getProfileEntries());
   });
 }
@@ -884,38 +930,34 @@ function massUnfollow(delayMs, whitelistArr, maxLimit) {
 
   const whitelistSet = new Set(whitelistArr);
   const limit = maxLimit || 0;
-  let count = 0;
-  let skipped = 0;
-  let stopped = false;
+  let count = 0, skipped = 0, stopped = false;
   const wait = (ms) => new Promise(res => setTimeout(res, ms));
 
   function onMessage(message, _sender, sendResponse) {
-    if (message.type === 'stop-unfollow') {
-      stopped = true;
-      sendResponse({ ok: true });
-    }
+    if (message.type === 'stop-unfollow') { stopped = true; sendResponse({ ok: true }); }
   }
   chrome.runtime.onMessage.addListener(onMessage);
 
   function getFollowingButtons() {
-    return [...document.querySelectorAll('button')].filter(
-      btn => btn.innerText === 'Following'
-    );
+    return [...document.querySelectorAll('button')].filter(b => b.innerText === 'Following');
   }
 
   function getUsernameForButton(btn) {
     let container = btn.closest('[class]');
     for (let i = 0; i < 10 && container; i++) {
-      const links = container.querySelectorAll('a[href*="/"]');
-      for (const link of links) {
+      for (const link of container.querySelectorAll('a[href*="/"]')) {
         const href = link.getAttribute('href');
-        if (href && href.match(/^\/[^/]+\/$/)) {
-          return href.replace(/\//g, '');
-        }
+        if (href && href.match(/^\/[^/]+\/$/)) return href.replace(/\//g, '');
       }
       container = container.parentElement;
     }
     return null;
+  }
+
+  function checkActionBlock() {
+    const allText = document.body.innerText || '';
+    return allText.includes('Try Again Later') || allText.includes('Action Blocked') ||
+      allText.includes('We limit how often');
   }
 
   async function unfollowOne(btn) {
@@ -928,13 +970,33 @@ function massUnfollow(delayMs, whitelistArr, maxLimit) {
 
     btn.click();
     await wait(800);
-    const confirmBtn = [...document.querySelectorAll('button')].find(
-      b => b.innerText === 'Unfollow'
-    );
+
+    // Check for action block after clicking
+    if (checkActionBlock()) {
+      // Try to dismiss the dialog
+      const okBtn = [...document.querySelectorAll('button')].find(b => b.innerText === 'OK');
+      if (okBtn) okBtn.click();
+      chrome.runtime.sendMessage({ type: 'unfollow-error', error: 'Action blocked by Instagram! Wait before trying again.' });
+      stopped = true;
+      return;
+    }
+
+    const confirmBtn = [...document.querySelectorAll('button')].find(b => b.innerText === 'Unfollow');
     if (confirmBtn) {
       confirmBtn.click();
       count++;
-      chrome.runtime.sendMessage({ type: 'unfollow-count', count, skipped });
+      await wait(500);
+
+      // Check for action block after confirming
+      if (checkActionBlock()) {
+        const okBtn = [...document.querySelectorAll('button')].find(b => b.innerText === 'OK');
+        if (okBtn) okBtn.click();
+        chrome.runtime.sendMessage({ type: 'unfollow-error', error: 'Action blocked by Instagram! Wait before trying again.' });
+        stopped = true;
+        return;
+      }
+
+      chrome.runtime.sendMessage({ type: 'unfollow-count', count, skipped, username });
       console.log('Unfollowed:', username || count);
       await wait(delayMs);
     }
@@ -946,8 +1008,7 @@ function massUnfollow(delayMs, whitelistArr, maxLimit) {
       while (!stopped && (limit === 0 || count < limit)) {
         const buttons = getFollowingButtons();
         if (buttons.length === 0) {
-          window.scrollBy(0, 600);
-          await wait(1500);
+          window.scrollBy(0, 600); await wait(1500);
           emptyRounds++;
           if (emptyRounds >= 5) break;
           continue;
@@ -957,10 +1018,9 @@ function massUnfollow(delayMs, whitelistArr, maxLimit) {
           if (stopped || (limit > 0 && count >= limit)) break;
           await unfollowOne(btn);
         }
-        window.scrollBy(0, 600);
-        await wait(1000);
+        window.scrollBy(0, 600); await wait(1000);
       }
-      chrome.runtime.sendMessage({ type: 'unfollow-done', count });
+      if (!stopped) chrome.runtime.sendMessage({ type: 'unfollow-done', count });
     } catch (err) {
       chrome.runtime.sendMessage({ type: 'unfollow-error', error: err.message });
     } finally {
@@ -976,46 +1036,42 @@ function selectiveUnfollow(usernames, delayMs) {
   if (window.__unfollowRunning) return;
   window.__unfollowRunning = true;
 
-  let count = 0;
-  let stopped = false;
+  let count = 0, stopped = false;
   const total = usernames.length;
   const remaining = new Set(usernames);
   const wait = (ms) => new Promise(res => setTimeout(res, ms));
 
   function onMessage(message, _sender, sendResponse) {
-    if (message.type === 'stop-unfollow') {
-      stopped = true;
-      sendResponse({ ok: true });
-    }
+    if (message.type === 'stop-unfollow') { stopped = true; sendResponse({ ok: true }); }
   }
   chrome.runtime.onMessage.addListener(onMessage);
 
   function findScrollContainer() {
     const dialog = document.querySelector('[role="dialog"]');
     if (dialog) {
-      const scrollables = dialog.querySelectorAll('div');
-      for (const div of scrollables) {
-        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) {
-          return div;
-        }
+      for (const div of dialog.querySelectorAll('div')) {
+        if (div.scrollHeight > div.clientHeight && div.clientHeight > 100) return div;
       }
     }
     return null;
   }
 
   function findButtonForUser(username) {
-    const links = document.querySelectorAll('a[href="/' + username + '/"]');
-    for (const link of links) {
+    for (const link of document.querySelectorAll('a[href="/' + username + '/"]')) {
       let container = link.parentElement;
       for (let i = 0; i < 10 && container; i++) {
-        const btn = [...container.querySelectorAll('button')].find(
-          b => b.innerText === 'Following'
-        );
+        const btn = [...container.querySelectorAll('button')].find(b => b.innerText === 'Following');
         if (btn) return btn;
         container = container.parentElement;
       }
     }
     return null;
+  }
+
+  function checkActionBlock() {
+    const allText = document.body.innerText || '';
+    return allText.includes('Try Again Later') || allText.includes('Action Blocked') ||
+      allText.includes('We limit how often');
   }
 
   async function run() {
@@ -1025,7 +1081,6 @@ function selectiveUnfollow(usernames, delayMs) {
 
       while (!stopped && remaining.size > 0) {
         let foundAny = false;
-
         for (const username of [...remaining]) {
           if (stopped) break;
           const btn = findButtonForUser(username);
@@ -1035,25 +1090,37 @@ function selectiveUnfollow(usernames, delayMs) {
           btn.click();
           await wait(800);
 
-          const confirmBtn = [...document.querySelectorAll('button')].find(
-            b => b.innerText === 'Unfollow'
-          );
+          if (checkActionBlock()) {
+            const okBtn = [...document.querySelectorAll('button')].find(b => b.innerText === 'OK');
+            if (okBtn) okBtn.click();
+            chrome.runtime.sendMessage({ type: 'selective-error', error: 'Action blocked by Instagram! Wait before trying again.' });
+            stopped = true; break;
+          }
+
+          const confirmBtn = [...document.querySelectorAll('button')].find(b => b.innerText === 'Unfollow');
           if (confirmBtn) {
             confirmBtn.click();
             count++;
             remaining.delete(username);
-            chrome.runtime.sendMessage({ type: 'selective-count', count, total });
+            await wait(500);
+
+            if (checkActionBlock()) {
+              const okBtn = [...document.querySelectorAll('button')].find(b => b.innerText === 'OK');
+              if (okBtn) okBtn.click();
+              chrome.runtime.sendMessage({ type: 'selective-error', error: 'Action blocked by Instagram! Wait before trying again.' });
+              stopped = true; break;
+            }
+
+            chrome.runtime.sendMessage({ type: 'selective-count', count, total, username });
             console.log('Unfollowed:', username, '(' + count + '/' + total + ')');
             await wait(delayMs);
           }
         }
 
+        if (stopped) break;
         if (!foundAny) {
-          if (scrollContainer) {
-            scrollContainer.scrollTop = scrollContainer.scrollHeight;
-          } else {
-            window.scrollBy(0, 600);
-          }
+          if (scrollContainer) scrollContainer.scrollTop = scrollContainer.scrollHeight;
+          else window.scrollBy(0, 600);
           await wait(1500);
           emptyRounds++;
           if (emptyRounds >= 5) break;
@@ -1062,7 +1129,7 @@ function selectiveUnfollow(usernames, delayMs) {
         }
       }
 
-      chrome.runtime.sendMessage({ type: 'selective-done', count, total });
+      if (!stopped) chrome.runtime.sendMessage({ type: 'selective-done', count, total });
     } catch (err) {
       chrome.runtime.sendMessage({ type: 'selective-error', error: err.message });
     } finally {
