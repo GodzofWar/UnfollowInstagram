@@ -1,12 +1,517 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Instagram Mass Unfollow</title>
-    <script src="popup.js" defer></script>
+  <title>Instagram Mass Unfollow</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      width: 320px;
+      background: #fafafa;
+      color: #262626;
+    }
+
+    h2 {
+      font-size: 16px;
+      font-weight: 600;
+      padding: 14px 16px 0;
+      text-align: center;
+    }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #dbdbdb;
+      margin: 12px 0 0;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 10px 4px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      color: #8e8e8e;
+      border-bottom: 2px solid transparent;
+      background: none;
+      border-top: none;
+      border-left: none;
+      border-right: none;
+      border-radius: 0;
+    }
+
+    .tab:hover {
+      opacity: 1;
+      color: #262626;
+    }
+
+    .tab.active {
+      color: #262626;
+      border-bottom-color: #262626;
+    }
+
+    /* Panels */
+    .panel {
+      display: none;
+      padding: 16px;
+    }
+
+    .panel.active {
+      display: block;
+    }
+
+    /* Shared */
+    .status {
+      text-align: center;
+      font-size: 13px;
+      color: #8e8e8e;
+      margin-bottom: 12px;
+      min-height: 18px;
+    }
+
+    .status.running { color: #0095f6; }
+    .status.error { color: #ed4956; }
+
+    .count {
+      text-align: center;
+      font-size: 28px;
+      font-weight: 700;
+      margin-bottom: 4px;
+    }
+
+    .count-label {
+      text-align: center;
+      font-size: 12px;
+      color: #8e8e8e;
+      margin-bottom: 16px;
+    }
+
+    .delay-setting {
+      margin-bottom: 16px;
+    }
+
+    .delay-setting label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .delay-setting select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #dbdbdb;
+      border-radius: 6px;
+      font-size: 13px;
+      background: #fff;
+      color: #262626;
+    }
+
+    .buttons {
+      display: flex;
+      gap: 8px;
+    }
+
+    button {
+      flex: 1;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    button:hover { opacity: 0.85; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-primary { background: #0095f6; color: #fff; }
+    .btn-danger { background: #ed4956; color: #fff; }
+    .btn-secondary { background: #efefef; color: #262626; }
+    .btn-warn { background: #ff9500; color: #fff; }
+
+    /* Progress bar */
+    .progress-wrap {
+      margin-bottom: 12px;
+      display: none;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #efefef;
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: #0095f6;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+      width: 0%;
+    }
+
+    .progress-fill.indeterminate {
+      width: 30%;
+      animation: indeterminate 1.2s ease-in-out infinite;
+    }
+
+    @keyframes indeterminate {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(400%); }
+    }
+
+    .progress-text {
+      font-size: 11px;
+      color: #8e8e8e;
+      text-align: center;
+      margin-top: 4px;
+    }
+
+    /* Select panel */
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .toolbar input[type="text"] {
+      flex: 1;
+      padding: 7px 10px;
+      border: 1px solid #dbdbdb;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .toolbar input[type="text"]:focus {
+      border-color: #0095f6;
+    }
+
+    .select-all-wrap {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .profile-list {
+      max-height: 280px;
+      overflow-y: auto;
+      border: 1px solid #dbdbdb;
+      border-radius: 8px;
+      background: #fff;
+      margin-bottom: 12px;
+    }
+
+    .profile-list:empty {
+      display: none;
+    }
+
+    .profile-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .profile-item:last-child {
+      border-bottom: none;
+    }
+
+    .profile-item:hover {
+      background: #fafafa;
+    }
+
+    .profile-item input[type="checkbox"] {
+      flex-shrink: 0;
+    }
+
+    .profile-item .username {
+      font-weight: 600;
+    }
+
+    .profile-item .display-name {
+      color: #8e8e8e;
+      margin-left: 4px;
+    }
+
+    .profile-item .whitelist-badge {
+      font-size: 10px;
+      color: #ff9500;
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+
+    .selected-count {
+      font-size: 12px;
+      color: #8e8e8e;
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    .empty-msg {
+      text-align: center;
+      color: #8e8e8e;
+      font-size: 13px;
+      padding: 24px 16px;
+    }
+
+    /* Whitelist panel */
+    .whitelist-add {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .whitelist-add input {
+      flex: 1;
+      padding: 8px 10px;
+      border: 1px solid #dbdbdb;
+      border-radius: 6px;
+      font-size: 13px;
+      outline: none;
+    }
+
+    .whitelist-add input:focus {
+      border-color: #0095f6;
+    }
+
+    .whitelist-add button {
+      flex: 0 0 auto;
+      padding: 8px 14px;
+    }
+
+    .whitelist-list {
+      max-height: 300px;
+      overflow-y: auto;
+      border: 1px solid #dbdbdb;
+      border-radius: 8px;
+      background: #fff;
+      margin-bottom: 12px;
+    }
+
+    .whitelist-list:empty {
+      display: none;
+    }
+
+    .whitelist-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: 13px;
+    }
+
+    .whitelist-item:last-child {
+      border-bottom: none;
+    }
+
+    .whitelist-item .username {
+      font-weight: 600;
+    }
+
+    .whitelist-item .remove-btn {
+      background: none;
+      border: none;
+      color: #ed4956;
+      font-size: 16px;
+      cursor: pointer;
+      padding: 0 4px;
+      flex: 0;
+      font-weight: 400;
+      border-radius: 0;
+    }
+
+    .whitelist-item .remove-btn:hover {
+      opacity: 0.7;
+    }
+
+    .whitelist-count {
+      font-size: 12px;
+      color: #8e8e8e;
+      text-align: center;
+    }
+
+    /* Protect button in profile list */
+    .profile-item .protect-btn {
+      background: none;
+      border: none;
+      color: #8e8e8e;
+      font-size: 14px;
+      cursor: pointer;
+      padding: 0 2px;
+      flex: 0 0 auto;
+      border-radius: 0;
+      line-height: 1;
+      title: 'Add to whitelist';
+    }
+
+    .profile-item .protect-btn:hover {
+      color: #ff9500;
+      opacity: 1;
+    }
+
+    /* Limit setting */
+    .limit-setting {
+      margin-bottom: 16px;
+    }
+
+    .limit-setting label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .limit-setting select {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid #dbdbdb;
+      border-radius: 6px;
+      font-size: 13px;
+      background: #fff;
+      color: #262626;
+    }
+
+    /* Export button */
+    .export-row {
+      display: none;
+      margin-bottom: 12px;
+    }
+
+    .export-row button {
+      width: 100%;
+      font-size: 13px;
+      padding: 8px;
+    }
+  </style>
 </head>
 <body>
-    <h2>Mass Unfollow</h2>
-    <button id="start">Start Unfollowing</button>
-    <button id="stop">Stop Unfollowing</button>
+  <h2>Mass Unfollow</h2>
+
+  <div class="tabs">
+    <button class="tab active" data-panel="mass-panel">Unfollow All</button>
+    <button class="tab" data-panel="select-panel">Select</button>
+    <button class="tab" data-panel="whitelist-panel">Whitelist</button>
+  </div>
+
+  <!-- Mass Unfollow Panel -->
+  <div id="mass-panel" class="panel active">
+    <div id="mass-status" class="status">Ready</div>
+    <div id="mass-progress" class="progress-wrap">
+      <div class="progress-bar"><div id="mass-progress-fill" class="progress-fill"></div></div>
+      <div id="mass-progress-text" class="progress-text"></div>
+    </div>
+    <div id="mass-count" class="count">0</div>
+    <div class="count-label">unfollowed</div>
+    <div class="delay-setting">
+      <label for="mass-delay">Delay between unfollows</label>
+      <select id="mass-delay">
+        <option value="2000">Fast (2s) - higher risk</option>
+        <option value="4000" selected>Normal (4s)</option>
+        <option value="8000">Slow (8s) - safer</option>
+        <option value="15000">Very slow (15s) - safest</option>
+      </select>
+    </div>
+    <div class="limit-setting">
+      <label for="mass-limit">Max unfollows per session</label>
+      <select id="mass-limit">
+        <option value="0">No limit</option>
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+      </select>
+    </div>
+    <div class="buttons">
+      <button id="start" class="btn-primary">Start</button>
+      <button id="stop" class="btn-danger" disabled>Stop</button>
+    </div>
+  </div>
+
+  <!-- Select Profiles Panel -->
+  <div id="select-panel" class="panel">
+    <div id="select-status" class="status">Choose how to load profiles</div>
+    <div id="select-progress" class="progress-wrap">
+      <div class="progress-bar"><div id="select-progress-fill" class="progress-fill"></div></div>
+      <div id="select-progress-text" class="progress-text"></div>
+    </div>
+    <div class="buttons" style="margin-bottom: 8px;">
+      <button id="load-profiles" class="btn-secondary">Load All</button>
+      <button id="load-least-interacted" class="btn-primary">Least Interacted</button>
+    </div>
+    <div style="margin-bottom: 12px;">
+      <button id="load-non-followers" class="btn-danger" style="width: 100%;">Non-Followers</button>
+      <div style="font-size: 11px; color: #8e8e8e; text-align: center; margin-top: 4px;">
+        Must be on your own profile page
+      </div>
+    </div>
+    <div id="select-toolbar" class="toolbar" style="display: none;">
+      <input type="text" id="search" placeholder="Search usernames...">
+    </div>
+    <div id="select-all-container" class="select-all-wrap" style="display: none;">
+      <input type="checkbox" id="select-all">
+      <label for="select-all">Select all</label>
+    </div>
+    <div id="profile-list" class="profile-list"></div>
+    <div id="selected-count" class="selected-count" style="display: none;"></div>
+    <div id="export-row" class="export-row">
+      <button id="export-csv" class="btn-secondary">Export list as CSV</button>
+    </div>
+    <div id="select-count" class="count" style="display: none;">0</div>
+    <div id="select-count-label" class="count-label" style="display: none;">unfollowed</div>
+    <div class="buttons" id="select-buttons" style="display: none;">
+      <button id="unfollow-selected" class="btn-primary">Unfollow Selected</button>
+      <button id="stop-selected" class="btn-danger" disabled>Stop</button>
+    </div>
+    <div class="delay-setting" id="select-delay-setting" style="display: none; margin-top: 12px;">
+      <label for="select-delay">Delay between unfollows</label>
+      <select id="select-delay">
+        <option value="2000">Fast (2s) - higher risk</option>
+        <option value="4000" selected>Normal (4s)</option>
+        <option value="8000">Slow (8s) - safer</option>
+        <option value="15000">Very slow (15s) - safest</option>
+      </select>
+    </div>
+    <div class="limit-setting" id="select-limit-setting" style="display: none;">
+      <label for="select-limit">Max unfollows per session</label>
+      <select id="select-limit">
+        <option value="0">No limit</option>
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="200">200</option>
+        <option value="500">500</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Whitelist Panel -->
+  <div id="whitelist-panel" class="panel">
+    <div class="status">Protected accounts won't be unfollowed</div>
+    <div class="whitelist-add">
+      <input type="text" id="whitelist-input" placeholder="Enter username...">
+      <button id="whitelist-add-btn" class="btn-primary" style="font-size: 13px;">Add</button>
+    </div>
+    <div id="whitelist-list" class="whitelist-list"></div>
+    <div id="whitelist-count" class="whitelist-count"></div>
+  </div>
+
+  <script src="popup.js"></script>
 </body>
 </html>
